@@ -34,6 +34,7 @@ under the hood.
 
 from __future__ import annotations
 
+import os
 import typing as t
 import uuid
 from copy import deepcopy
@@ -45,16 +46,250 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig, RunnableParallel
 from langchain_openai import ChatOpenAI
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    TypeAdapter,
+    model_validator,
+)
 
 import sr_assistant.app.utils as ut
 from sr_assistant.core import models, schemas
-from sr_assistant.core.schemas import ScreeningResponse, ScreeningResult
+from sr_assistant.core.schemas import (
+    ScreeningResolutionSchema,
+    ScreeningResponse,
+    ScreeningResult,
+)
 from sr_assistant.core.types import ScreeningStrategyType
 
 if t.TYPE_CHECKING:
     from langchain_community.callbacks.openai_info import OpenAICallbackHandler
     from langchain_core.tracers.schemas import Run
+
+
+# Resolver model and chain for resolving disagreements between reviewers
+RESOLVER_MODEL = ChatOpenAI(
+    model=os.getenv("SRA_RESOLVER_MODEL", "o3-mini-high"),
+    api_key=SecretStr(os.getenv("OPENAI_API_KEY") or ""),
+    temperature=0.0,
+)
+
+resolver_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """\
+You are an expert systematic review screening assistant, built to resolve disputes between reviewers with confidence.
+
+We've two reviewers disagreeing on whether a given PubMed search result should be included in a systematic review.
+
+one is using a "comprehensive" screening strategy, and the other is using a "conservative" screening strategy. These prioritize sensitivity and accuracy as different human reviewers might.
+
+You will be given the search result, the systematic review, and the two reviewers' screening results.""",
+        ),
+        (
+            "human",
+            """\
+<search_result>
+{search_result}
+</search_result>
+
+<systematic_review>
+{systematic_review}
+</systematic_review>
+
+<comprehensive_reviewer_result>
+{comprehensive_reviewer_result}
+</comprehensive_reviewer_result>
+
+<conservative_reviewer_result>
+{conservative_reviewer_result}
+</conservative_reviewer_result>
+
+<resolver_output>
+{resolver_output}
+</resolver_output>""",
+        ),
+    ]
+)
+
+# Create resolver chain with structured output
+resolver_model_struct_output = RESOLVER_MODEL.with_structured_output(
+    ScreeningResolutionSchema
+)
+resolver_chain = resolver_prompt | resolver_model_struct_output
+
+
+def make_resolver_chain_input(
+    pubmed_result: models.PubMedResult,
+    review: models.SystematicReview,
+    conservative_result: ScreeningResult,
+    comprehensive_result: ScreeningResult,
+) -> dict[str, str]:
+    """Create input for resolver_chain.
+
+    Args:
+        pubmed_result: The PubMed search result with conflicting screening decisions
+        review: The systematic review
+        conservative_result: The screening result from the conservative reviewer
+        comprehensive_result: The screening result from the comprehensive reviewer
+
+    Returns:
+        dict: Input variables for the resolver prompt
+    """
+    # Format search result for the prompt
+    search_result = f"""
+Title: {pubmed_result.title}
+PMID: {pubmed_result.pmid}
+Journal: {pubmed_result.journal}
+Year: {pubmed_result.year}
+Abstract: {pubmed_result.abstract}
+"""
+
+    # Format systematic review for the prompt
+    systematic_review = f"""
+Research Question: {review.research_question}
+Background: {review.background or "Not provided"}
+# Use correct fields based on model update
+Criteria Framework: {review.criteria_framework.value if review.criteria_framework else "N/A"}
+Criteria Answers: {review.criteria_framework_answers if review.criteria_framework_answers else "{}"}
+Exclusion Criteria: {review.exclusion_criteria}
+"""
+
+    # Format conservative result for the prompt
+    conservative_reviewer_result = f"""
+Decision: {conservative_result.decision}
+Confidence Score: {conservative_result.confidence_score}
+Rationale: {conservative_result.rationale}
+"""
+    if conservative_result.extracted_quotes:
+        conservative_reviewer_result += (
+            f"Extracted Quotes: {', '.join(conservative_result.extracted_quotes)}\n"
+        )
+
+    # Format comprehensive result for the prompt
+    comprehensive_reviewer_result = f"""
+Decision: {comprehensive_result.decision}
+Confidence Score: {comprehensive_result.confidence_score}
+Rationale: {comprehensive_result.rationale}
+"""
+    if comprehensive_result.extracted_quotes:
+        comprehensive_reviewer_result += (
+            f"Extracted Quotes: {', '.join(comprehensive_result.extracted_quotes)}\n"
+        )
+
+    return {
+        "search_result": search_result,
+        "systematic_review": systematic_review,
+        "conservative_reviewer_result": conservative_reviewer_result,
+        "comprehensive_reviewer_result": comprehensive_reviewer_result,
+    }
+
+
+def resolve_screening_conflict(
+    pubmed_result: models.PubMedResult,
+    review: models.SystematicReview,
+    conservative_result: ScreeningResult,
+    comprehensive_result: ScreeningResult,
+) -> models.ScreeningResolution:
+    """Resolve conflicting screening decisions between conservative and comprehensive reviewers.
+
+    Args:
+        pubmed_result: PubMed search result with conflicting screening decisions
+        review: Systematic review
+        conservative_result: Screening result from the conservative reviewer
+        comprehensive_result: Screening result from the comprehensive reviewer
+
+    Returns:
+        models.ScreeningResolution: The resolution decision
+
+    Raises:
+        Exception: If the resolver chain fails
+    """
+    logger.info(
+        f"Resolving screening conflict for PMID: {pubmed_result.pmid}, conservative: {conservative_result.decision}, comprehensive: {comprehensive_result.decision}"
+    )
+
+    # Create chain input
+    chain_input = make_resolver_chain_input(
+        pubmed_result=pubmed_result,
+        review=review,
+        conservative_result=conservative_result,
+        comprehensive_result=comprehensive_result,
+    )
+
+    # Track execution time and invoke chain
+    start_time = datetime.now(tz=timezone.utc)
+
+    try:
+        with get_openai_callback() as cb:
+            # Invoke the resolver chain
+            # Use Any for result until converted to schema
+            result = resolver_chain.invoke(
+                chain_input,
+                config=RunnableConfig(
+                    tags=[
+                        "sra:resolver",
+                        f"sra:review_id:{review.id}",
+                        f"sra:pubmed_result_id:{pubmed_result.id}",
+                    ],
+                    metadata={
+                        "review_id": str(review.id),
+                        "pubmed_result_id": str(pubmed_result.id),
+                        "conservative_result_id": str(conservative_result.id),
+                        "comprehensive_result_id": str(comprehensive_result.id),
+                    },
+                ),
+            )
+
+        end_time = datetime.now(tz=timezone.utc)
+        logger.info(
+            f"Resolver chain completed in {(end_time - start_time).total_seconds():.2f}s, "
+            + f"tokens: {cb.total_tokens}, cost: ${cb.total_cost:.4f}"
+        )
+
+        # Convert result to proper schema if needed
+        if not isinstance(result, ScreeningResolutionSchema):
+            result = ScreeningResolutionSchema.model_validate(result)
+
+        # Create ScreeningResolution model
+        resolution = models.ScreeningResolution(
+            id=uuid.uuid4(),
+            review_id=review.id,
+            pubmed_result_id=pubmed_result.id,
+            conservative_result_id=conservative_result.id,
+            comprehensive_result_id=comprehensive_result.id,
+            resolver_decision=result.resolver_decision,
+            resolver_reasoning=result.resolver_reasoning,
+            resolver_confidence_score=result.resolver_confidence_score,
+            resolver_model_name=RESOLVER_MODEL.model_name,
+            start_time=start_time,
+            end_time=end_time,
+            trace_id=None,
+            response_metadata={
+                "tokens": {
+                    "total": cb.total_tokens,
+                    "prompt": cb.prompt_tokens,
+                    "completion": cb.completion_tokens,
+                },
+                "cost": cb.total_cost,
+            },
+        )
+
+        logger.info(
+            f"Resolution: {resolution.resolver_decision}, confidence: {resolution.resolver_confidence_score}"
+        )
+
+        return resolution
+
+    except Exception as e:
+        logger.exception(
+            f"Error resolving screening conflict for PMID: {pubmed_result.pmid}",
+            exc_info=e,
+        )
+        raise
 
 
 class ScreenAbstractsChainOutputDict(t.TypedDict):
@@ -205,17 +440,29 @@ class ScreenAbstractResultTuple(t.NamedTuple):
 
 
 @logger.catch(onerror=lambda exc: st.error(exc) if ut.in_streamlit() else None)  # pyright: ignore [reportArgumentType]
-def chain_on_error_listener_cb(run_obj: Run) -> None:
-    cb_logger = logger.bind(run_id=run_obj.id, run_name=run_obj.name)
-    cb_logger.error("run_obj: {run_obj!r}", run_obj=run_obj)
-    for cr in run_obj.child_runs:
-        cb_cr_logger = logger.bind(
-            run_id=cr.id,
-            run_name=cr.name,
-            parent_run_id=run_obj.id,
-            parent_run_name=run_obj.name,
-        )
-        cb_cr_logger.error("child run: {cr!r}", cr=cr)
+def chain_on_error_listener_cb(error: BaseException, **kwargs: t.Any) -> None:
+    """Listener for Runnable sequence on_error events."""
+    run_obj = kwargs.get("run")
+    run_id = getattr(run_obj, "id", "unknown")
+    run_name = getattr(run_obj, "name", "unknown")
+    cb_logger = logger.bind(run_id=run_id, run_name=run_name)
+    # Use logger.exception to include traceback
+    cb_logger.exception(
+        f"Error during chain execution: run_id={run_id}, error={error!r}, kwargs={kwargs!r}",
+        error=error,
+        kwargs=kwargs,
+    )
+    # Optionally log child runs if needed, checking if run_obj exists and has child_runs
+    if run_obj and hasattr(run_obj, "child_runs") and run_obj.child_runs:
+        cb_logger.error("Associated run object: {run_obj!r}", run_obj=run_obj)
+        for cr in run_obj.child_runs:
+            cb_cr_logger = logger.bind(
+                run_id=getattr(cr, "id", "unknown"),
+                run_name=getattr(cr, "name", "unknown"),
+                parent_run_id=run_id,
+                parent_run_name=run_name,
+            )
+            cb_cr_logger.error("Associated child run: {cr!r}", cr=cr)
 
 
 @logger.catch(onerror=lambda exc: st.error(exc) if ut.in_streamlit() else None)  # pyright: ignore [reportArgumentType]

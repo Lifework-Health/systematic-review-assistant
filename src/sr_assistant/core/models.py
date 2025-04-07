@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import Mapped
 from sqlmodel import Field, Relationship, SQLModel  # type: ignore
 
-from sr_assistant.core.schemas import ExclusionReasons
 from sr_assistant.core.types import (
     CriteriaFramework,
     LogLevel,
@@ -80,13 +79,13 @@ class SystematicReview(SQLModelBase, table=True):
         - PICO, etc., need to figure out UI updating by agent ...
     """
 
-    _table_name: t.ClassVar[t.Literal["systematic_reviews"]] = "systematic_reviews"
+    _tablename: t.ClassVar[t.Literal["systematic_reviews"]] = "systematic_reviews"
 
-    __tablename__ = _table_name  # pyright: ignore # type: ignore
+    __tablename__ = _tablename  # pyright: ignore # type: ignore
 
     __table_args__ = (
-        add_gin_index(_table_name, "criteria_framework_answers"),
-        add_gin_index(_table_name, "review_metadata"),
+        add_gin_index(_tablename, "criteria_framework_answers"),
+        add_gin_index(_tablename, "review_metadata"),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -105,7 +104,7 @@ class SystematicReview(SQLModelBase, table=True):
         sa_column=sa.Column(
             sa.DateTime(timezone=True),
             server_default=sa.text("TIMEZONE('UTC', CURRENT_TIMESTAMP)"),
-            onupdate=sa.text("TIMEZONE('UTC', CURRENT_TIMESTAMP)"),
+            onupdate=sa.func.now(),
             nullable=True,
         ),
     )
@@ -145,9 +144,9 @@ class SystematicReview(SQLModelBase, table=True):
     )
     """Answers to the criteria framework."""
 
-    inclusion_criteria: str = Field(
+    inclusion_criteria: str | None = Field(
         description="Inclusion criteria. To be replaced by above framework fields.",
-        sa_column=sa.Column(sa.Text(), nullable=False),
+        sa_column=sa.Column(sa.Text(), nullable=True),
     )
     """Inclusion criteria."""
 
@@ -176,6 +175,11 @@ class SystematicReview(SQLModelBase, table=True):
     )
     """Log records for the review."""
 
+    screening_resolutions: Mapped[list["ScreeningResolution"]] = Relationship(
+        back_populates="review"
+    )
+    """Screening resolutions associated with this review."""
+
     review_metadata: MutableMapping[str, JsonValue] = Field(
         default_factory=dict,
         sa_column=sa.Column(sa_pg.JSONB(none_as_null=True), nullable=False),
@@ -192,9 +196,9 @@ class PubMedResult(SQLModelBase, table=True):
         - Maybe strategies should be just enumrated to avoid hardcoding in schema?
     """
 
-    _table_name: t.ClassVar[t.Literal["pubmed_results"]] = "pubmed_results"
+    _tablename: t.ClassVar[t.Literal["pubmed_results"]] = "pubmed_results"
 
-    __tablename__ = _table_name  # pyright: ignore # type: ignore
+    __tablename__ = _tablename  # pyright: ignore # type: ignore
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     created_at: datetime | None = Field(
@@ -214,7 +218,7 @@ class PubMedResult(SQLModelBase, table=True):
         sa_column=sa.Column(
             sa.DateTime(timezone=True),
             server_default=sa.text("TIMEZONE('UTC', CURRENT_TIMESTAMP)"),
-            onupdate=sa.text("TIMEZONE('UTC', CURRENT_TIMESTAMP)"),
+            onupdate=sa.func.now(),
             nullable=True,
         ),
     )
@@ -272,6 +276,9 @@ class PubMedResult(SQLModelBase, table=True):
         sa_relationship_kwargs={"lazy": "selectin"},
     )
 
+    resolution_id: uuid.UUID | None = Field(
+        default=None, foreign_key="screening_resolutions.id", nullable=True, index=True
+    )
     # One PubMedResult has two ScreenAbstractResults (conservative and comprehensive)
     # Circular relationship that causes Alembic warnings. AI says can be ignored since
     # valid business reason, but who trusts AI?
@@ -303,6 +310,105 @@ class PubMedResult(SQLModelBase, table=True):
         }
     )
 
+    resolution: Mapped["ScreeningResolution"] = Relationship(
+        sa_relationship_kwargs={
+            "uselist": False,  # Mark as one-to-one/scalar
+            "foreign_keys": "[PubMedResult.resolution_id]",  # Specify the FK for this relationship
+            "primaryjoin": None,  # Prevent automatic join condition determination
+        },
+    )
+
+
+class ScreeningResolution(SQLModelBase, table=True):
+    _tablename = "screening_resolutions"
+
+    __tablename__ = _tablename  # pyright: ignore # type: ignore
+
+    __table_args__ = (add_gin_index(_tablename, "response_metadata"),)
+
+    # --- Fields ---
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(
+            sa.DateTime(timezone=True),
+            server_default=sa.text("TIMEZONE('UTC', CURRENT_TIMESTAMP)"),
+            nullable=True,
+        ),
+    )
+    updated_at: datetime | None = Field(
+        default=None,
+        sa_column=sa.Column(
+            sa.DateTime(timezone=True),
+            server_default=sa.text("TIMEZONE('UTC', CURRENT_TIMESTAMP)"),
+            onupdate=sa.func.now(),
+            nullable=True,
+        ),
+    )
+    pubmed_result_id: uuid.UUID = Field(foreign_key="pubmed_results.id", index=True)
+    review_id: uuid.UUID = Field(foreign_key="systematic_reviews.id", index=True)
+    conservative_result_id: uuid.UUID = Field(
+        foreign_key="screen_abstract_results.id", index=True
+    )
+    comprehensive_result_id: uuid.UUID = Field(
+        foreign_key="screen_abstract_results.id", index=True
+    )
+    resolver_decision: ScreeningDecisionType = Field(
+        sa_column=sa.Column(
+            sa_pg.ENUM(
+                ScreeningDecisionType,
+                name="screeningdecisiontype",
+                values_callable=enum_values,
+                create_type=False,
+            ),
+            nullable=False,
+            index=True,
+        )
+    )
+    resolver_reasoning: str = Field(sa_column=sa.Column(sa.Text(), nullable=False))
+    resolver_confidence_score: float = Field(ge=0.0, le=1.0)
+    resolver_model_name: str | None = Field(default=None)
+    response_metadata: Mapping[str, JsonValue] | None = Field(
+        default_factory=dict,
+        sa_column=sa.Column(sa_pg.JSONB(none_as_null=True), nullable=False),
+    )
+    start_time: datetime | None = Field(
+        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
+    )
+    end_time: datetime | None = Field(
+        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
+    )
+    trace_id: uuid.UUID | None = Field(default=None, index=True, nullable=True)
+
+    # --- Relationships ---
+    pubmed_result: Mapped["PubMedResult"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[ScreeningResolution.pubmed_result_id]"
+        }
+    )
+    review: Mapped["SystematicReview"] = Relationship(
+        back_populates="screening_resolutions",
+        sa_relationship_kwargs={
+            "lazy": "selectin",
+            "foreign_keys": "[ScreeningResolution.review_id]",
+        },
+    )
+    # Add relationships to load the actual abstract results
+    conservative_result: Mapped["ScreenAbstractResult"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[ScreeningResolution.conservative_result_id]",
+            "lazy": "selectin",
+            "viewonly": True,  # Avoids potential conflicts with PubMedResult relationships
+        }
+    )
+    comprehensive_result: Mapped["ScreenAbstractResult"] = Relationship(
+        sa_relationship_kwargs={
+            "foreign_keys": "[ScreeningResolution.comprehensive_result_id]",
+            "lazy": "selectin",
+            "viewonly": True,  # Avoids potential conflicts with PubMedResult relationships
+        }
+    )
+
 
 class ScreenAbstractResult(SQLModelBase, table=True):
     """Abstract screening decision model.
@@ -325,13 +431,13 @@ class ScreenAbstractResult(SQLModelBase, table=True):
         response_metadata: dict[str, JsonValue]
     """
 
-    _table_name: t.ClassVar[t.Literal["screen_abstract_results"]] = (
+    _tablename: t.ClassVar[t.Literal["screen_abstract_results"]] = (
         "screen_abstract_results"
     )
 
-    __tablename__ = _table_name  # pyright: ignore # type: ignore
+    __tablename__ = _tablename  # pyright: ignore # type: ignore
 
-    __table_args__ = (add_gin_index(_table_name, "exclusion_reason_categories"),)
+    __table_args__ = (add_gin_index(_tablename, "exclusion_reason_categories"),)
 
     id: uuid.UUID = Field(
         primary_key=True,
@@ -352,7 +458,7 @@ class ScreenAbstractResult(SQLModelBase, table=True):
         sa_column=sa.Column(
             sa.DateTime(timezone=True),
             server_default=sa.text("TIMEZONE('UTC', CURRENT_TIMESTAMP)"),
-            onupdate=sa.text("TIMEZONE('UTC', CURRENT_TIMESTAMP)"),
+            onupdate=sa.func.now(),
             nullable=True,
         ),
     )
@@ -383,7 +489,7 @@ class ScreenAbstractResult(SQLModelBase, table=True):
         description="Supporting quotes from the title/abstract. Can be omitted if uncertain.",
         sa_column=sa.Column(sa_pg.ARRAY(sa.Text()), nullable=True),
     )
-    exclusion_reason_categories: ExclusionReasons = Field(
+    exclusion_reason_categories: Mapping[str, list[str]] = Field(
         default_factory=dict,
         description="The PRISMA exclusion reason categories for the decision. This complements the 'rationale' field.",
         sa_column=sa.Column(sa_pg.JSONB(none_as_null=True)),
@@ -463,13 +569,13 @@ class ScreenAbstractResult(SQLModelBase, table=True):
 class LogRecord(SQLModelBase, table=True):
     """Model for storing app log records."""
 
-    _table_name: t.ClassVar[t.Literal["log_records"]] = "log_records"
+    _tablename: t.ClassVar[t.Literal["log_records"]] = "log_records"
 
-    __tablename__ = _table_name  # pyright: ignore # type: ignore
+    __tablename__ = _tablename  # pyright: ignore # type: ignore
 
     __table_args__ = (
-        add_gin_index(_table_name, "extra"),
-        add_gin_index(_table_name, "exception"),
+        add_gin_index(_tablename, "extra"),
+        add_gin_index(_tablename, "exception"),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

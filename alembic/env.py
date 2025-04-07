@@ -6,13 +6,12 @@ from logging.config import fileConfig
 from typing import NoReturn
 from urllib.parse import parse_qs, urlparse
 
-import sqlalchemy as sa
 from dotenv import find_dotenv, load_dotenv
-from sqlalchemy import MetaData, engine_from_config, pool
+from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
-from sr_assistant.core.models import *
 
 from alembic import context
+from sr_assistant.core.models import *
 
 ENV_TO_DOTENV = {
     "local": ".env.local",
@@ -61,9 +60,8 @@ def mask_pg_dsn(dsn: str) -> str:
             masked += "?" + "&".join(masked_params)
 
         return masked
-    else:
-        # Handle key=value format
-        return re.sub(r"(user|password|username|credentials)=[^'\s&]+", r"\1=****", dsn)
+    # Handle key=value format
+    return re.sub(r"(user|password|username|credentials)=[^'\s&]+", r"\1=****", dsn)
 
 
 valid_envs = ENV_TO_DOTENV.keys()

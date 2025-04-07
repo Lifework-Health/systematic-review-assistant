@@ -1,33 +1,26 @@
 """Generate test data for systematic review database using SQLModel."""
 
 import os
-import sys
 from datetime import UTC, datetime
-import typing as t
 import uuid
 import argparse
 
 from sqlmodel import Session, SQLModel, create_engine, select, col
 import sqlalchemy as sa
-import sqlalchemy.dialects.postgresql as sa_pg
 from dotenv import load_dotenv
 
 from sr_assistant.core.models import (
     SystematicReview,
     PubMedResult,
-    ScreenAbstractResultModel,
+    ScreenAbstractResult,
 )
 from sr_assistant.core.types import (
     ScreeningDecisionType,
     ScreeningStrategyType
 )
-#from sr_assistant.app.database import session_factory # TODO: test this here?
-from sr_assistant.core.schemas import ExclusionReasons
+# from sr_assistant.core.schemas import ExclusionReasons
 
-from sqlalchemy.schema import DropTable
-from sqlalchemy.ext.compiler import compiles
-
-cleanup = False
+cleanup_flag = False
 
 def confirm_database_drop(engine: sa.Engine) -> bool:
     """Confirm database drop with user."""
@@ -44,12 +37,6 @@ def confirm_database_drop(engine: sa.Engine) -> bool:
         if response in {'n', 'no', ''}:  # Empty response counts as no
             return False
         print("Please answer 'y' or 'n'")
-
-@compiles(DropTable, "postgresql")
-def _compile_drop_table(element: DropTable, compiler: t.Any, **kwargs: t.Any) -> str:
-    if cleanup:
-        return compiler.visit_drop_table(element) + " CASCADE"
-    return compiler.visit_drop_table(element)
 
 def cleanup_database(engine: sa.Engine, cleanup: bool = False) -> None:
     """Drop all tables and custom types from the database.
@@ -75,36 +62,7 @@ def cleanup_database(engine: sa.Engine, cleanup: bool = False) -> None:
             GRANT ALL ON SCHEMA public TO public;
         """))
         conn.commit()
-        SQLModel.metadata.drop_all(engine) # make sqlmodel/sa aware of drops
-        #else:
-        #    try:
-        #        # Disable foreign key checks
-        #        conn.execute(text("SET session_replication_role = 'replica';"))
-
-        #        # Regular SQLModel cleanup
-        #        SQLModel.metadata.drop_all(engine)
-
-        #        # Find and drop custom types
-        #        custom_types_query = text("""
-        #            SELECT t.typname
-        #            FROM pg_type t
-        #            JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-        #            WHERE n.nspname = 'public'
-        #            AND t.typtype = 'e';  -- 'e' for enum types
-        #        """)
-
-        #        result = conn.execute(custom_types_query)
-        #        custom_types = result.fetchall()
-
-        #        for type_row in custom_types:
-        #            type_name = type_row[0]
-        #            conn.execute(text(f'DROP TYPE IF EXISTS "{type_name}" CASCADE;'))
-
-        #        conn.commit()
-        #    finally:
-        #        # Always re-enable foreign key checks
-        #        conn.execute(text("SET session_replication_role = 'origin';"))
-        #        conn.commit()
+        # SQLModel.metadata.drop_all(engine) # Not strictly needed after schema drop
 
 def create_test_data(engine: sa.Engine) -> None:
     """Create test data in database.
@@ -166,7 +124,7 @@ def create_test_data(engine: sa.Engine) -> None:
             trace_id = uuid.uuid4()
 
             # Conservative screening
-            conservative = ScreenAbstractResultModel(
+            conservative = ScreenAbstractResult(
                 id=uuid.uuid4(),
                 review_id=result.review_id,
                 pubmed_result_id=result.id,
@@ -175,6 +133,7 @@ def create_test_data(engine: sa.Engine) -> None:
                 confidence_score=0.85,
                 rationale="Test rationale for conservative screening",
                 extracted_quotes=["Test quote 1", "Test quote 2"],
+                exclusion_reason_categories={},  # Empty dict for testing
                 screening_strategy=ScreeningStrategyType.CONSERVATIVE,
                 model_name="test-model",
                 start_time=datetime.now(UTC),
@@ -183,16 +142,22 @@ def create_test_data(engine: sa.Engine) -> None:
             )
             screening_results.append(conservative)
 
-            # Comprehensive screening
-            comprehensive = ScreenAbstractResultModel(
+            # Comprehensive screening - Introduce conflict for odd indices
+            comp_decision = (
+                ScreeningDecisionType.EXCLUDE
+                if result.year > "2022" and int(result.year) % 2 != 0 # Conflict on odd year if conservative included
+                else ScreeningDecisionType.INCLUDE
+            )
+            comprehensive = ScreenAbstractResult(
                 id=uuid.uuid4(),
                 review_id=result.review_id,
                 pubmed_result_id=result.id,
                 trace_id=trace_id,
-                decision=ScreeningDecisionType.INCLUDE,
+                decision=comp_decision,
                 confidence_score=0.75,
                 rationale="Test rationale for comprehensive screening",
                 extracted_quotes=["Test quote 3", "Test quote 4"],
+                exclusion_reason_categories={},  # Empty dict for testing
                 screening_strategy=ScreeningStrategyType.COMPREHENSIVE,
                 model_name="test-model",
                 start_time=datetime.now(UTC),
@@ -201,24 +166,23 @@ def create_test_data(engine: sa.Engine) -> None:
             )
             screening_results.append(comprehensive)
 
-            #screening_results.extend([conservative, comprehensive])
             screening_pairs.append((result, conservative.id, comprehensive.id))
 
         # Add screening results first
         session.add_all(screening_results)
         session.commit()
 
-         # Now update PubMed results with the committed screening result IDs
+        # Now update PubMed results with the committed screening result IDs
         for result, cons_id, comp_id in screening_pairs:
             result.conservative_result_id = cons_id
             result.comprehensive_result_id = comp_id
         session.commit()
 
         # Verify results using SQLModel select
-        stmt = select(ScreenAbstractResultModel).order_by(col(ScreenAbstractResultModel.created_at))
-        results = session.exec(stmt).all()
-        print(f"Created {len(results)} screening results")
-        for result in results:
+        stmt = select(ScreenAbstractResult).order_by(col(ScreenAbstractResult.created_at))
+        db_results = session.exec(stmt).all()
+        print(f"Created {len(db_results)} screening results")
+        for result in db_results:
             print(f"- {result.created_at} {result.screening_strategy}: {result.decision} ({result.confidence_score})")
 
 if __name__ == "__main__":
@@ -229,7 +193,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Set the global flag based on the argument
-    cleanup = args.cleanup
+    cleanup_flag = args.cleanup
 
     db_url = os.getenv("SRA_DATABASE_URL", os.getenv("DATABASE_URL", ""))
     if "sra_integration_test" not in db_url:
@@ -238,9 +202,15 @@ if __name__ == "__main__":
 
     engine = create_engine(db_url, echo=True)
 
-    if cleanup := confirm_database_drop(engine=engine):
-        print("Running in cleanup mode")
-        cleanup_database(engine, cleanup)
+    # Call the local cleanup_database function
+    if cleanup_flag:
+        # Confirmation happens interactively if needed
+        if confirm_database_drop(engine=engine):
+            print("Running in cleanup mode")
+            cleanup_database(engine, cleanup=True)
+        else:
+            print("Cleanup cancelled by user.")
+            exit(0)
     else:
         print("Running in non-cleanup mode")
 

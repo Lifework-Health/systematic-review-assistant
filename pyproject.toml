@@ -7,49 +7,48 @@ readme = { file = "README.md", content-type = "text/markdown" }
 # This project is pinned to 3.12.3, and Python is managed by uv and
 # is installed with `make install` (project local, doesn't change
 # your system. Only used when calling via `uv` in the project dir.)
-requires-python = ">=3.12,<3.12.4"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-  "langchain>=0.3.14",
+  "annotated-types>=0.7.0",
+  "biopython>=1.83",
+  "dependency-injector>=4.45.0",
+  "devtools>=0.12.2",
+  "fastapi>=0.115.6",
+  "langchain-anthropic>=0.3.1",
   "langchain-community>=0.3.14",
   "langchain-core>=0.3.29",
   "langchain-openai>=0.2.14",
+  "langchain>=0.3.14",
+  "langgraph-checkpoint-postgres>=2.0.12",
+  "langgraph>=0.2.61",
+  "langsmith>=0.3.6",
   "llama-index>=0.12.10",
+  "logfire[fastapi,httpx,psycopg,sqlalchemy,system-metrics]>=3.5.3",
+  "loguru>=0.7.3",
+  "more-itertools>=10.6.0",
   "numpy==1.26.2",
   "openai>=1.14.0",
+  "orjson>=3.10.15",
+  "pandas-stubs>=2.2.3.241126",
   "pandas==2.1.4",
+  "pandera[io]>=0.22.1",
+  "psycopg2-binary>=2.9.10",
+  "psycopg[binary,pool]>=3.2.4",
+  "pydantic-extra-types>=2.10.2",
+  "pydantic-settings>=2.7.1",
+  "pydantic>=2.10.4",
   "pypdf>=5.1.0,<6.0.0",
   "python-docx==1.0.1",
-  "python-dotenv==1.0.0",
-  "streamlit>=1.41.1",
-  "biopython>=1.83",
-  "pydantic>=2.10.4",
-  "langgraph>=0.2.61",
-  "loguru>=0.7.3",
-  "pydantic-settings>=2.7.1",
   "sqlalchemy[asyncio]>=2.0.36",
-  "uuid6>=2024.7.10",
   "sqlmodel>=0.0.22",
-  "fastapi>=0.115.6",
-  "dependency-injector>=4.45.0",
-  "langchain-anthropic>=0.3.1",
-  "streamlit-extras>=0.5.0",
-  "psycopg[binary,pool]>=3.2.4",
-  "langgraph-checkpoint-postgres>=2.0.12",
-  "supabase>=2.11.0",
-  "psycopg2-binary>=2.9.10",
-  "pydantic-extra-types>=2.10.2",
-  "streamlit-elements>=0.1.0",
-  "streamlit-antd-components>=0.3.2",
-  "streamlit-pydantic",
   "streamlit-aggrid>=1.1.0",
-  "pandera[io]>=0.22.1",
-  "annotated-types>=0.7.0",
-  "devtools>=0.12.2",
-  "orjson>=3.10.15",
-  "langsmith>=0.3.6",
-  "more-itertools>=10.6.0",
-  "logfire[sqlalchemy]>=3.5.3",
-  "pandas-stubs>=2.2.3.241126",
+  "streamlit-antd-components>=0.3.2",
+  "streamlit-elements>=0.1.0",
+  "streamlit-extras>=0.5.0",
+  "streamlit-pydantic",
+  "streamlit>=1.41.1",
+  "supabase>=2.11.0",
+  "uuid6>=2024.7.10",
 ]
 
 [dependency-groups]
@@ -73,10 +72,13 @@ dev = [
   "pytest-asyncio>=0.25.3",
   "pytest-mock>=3.14.0",
   "mock-alchemy>=0.2.6",
+  "langchain-mcp-tools>=0.1.7",
+  "pyright>=1.1.395",
+  "pytest-dotenv>=0.5.2",
 ]
 security = ["pip-audit>=2.7.3", "ruff>=0.8.6"]
 observability = [
-  "logfire>=3.5.3",
+  "logfire[fastapi,httpx,psycopg,sqlalchemy,system-metrics]>=3.5.3",
   "opentelemetry-instrumentation-aiohttp-client>=0.51b0",
   "opentelemetry-instrumentation-fastapi>=0.51b0",
   "opentelemetry-instrumentation-httpx>=0.51b0",
@@ -90,6 +92,8 @@ observability = [
   "opentelemetry-instrumentation-urllib>=0.51b0",
 ]
 
+[tool.logfire]
+pydantic_plugin_record = "all"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sr_assistant"]
@@ -180,6 +184,7 @@ ignore = [
   "D412",    # newline after docstring section: to create a note admonition in mkdocstrings docs, a blank line is needed
   "E501",    # Line too long, formatting will handle and sometimes it's fine
   "ERA001",  # Commented-out code
+  "ISC001",
   "G004",    # Logging statement uses f-string
   "PGH003",  # type: ignore
   "PLE1205", # too many arguments for `logging` format string, not for loguru
@@ -283,12 +288,14 @@ ignore-overlong-task-comments = true
 [tool.pytest.ini_options]
 addopts = "-vvv -ra -q --import-mode=importlib"
 pythonpath = ["src/sr_assistant", "tools/"]
-testpaths = ["tests/unit"] # Default to unit tests
+testpaths = ["tests/unit"]
 markers = [
-  "integration: marks tests as integration tests",
+  "integration: marks tests as integration tests (require database connection)",
   "unit: marks tests as unit tests (default)",
 ]
 filterwarnings = ["ignore::UserWarning"]
+env_files = [".env", ".env.test"]
+env_override_existing_values = true
 
 [tool.coverage.run]
 source = ["src/sr_assistant"]
@@ -309,6 +316,7 @@ fail_under = 0 # Set minimum coverage percentage when ready
 
 [tool.uv.sources]
 streamlit-pydantic = { git = "https://github.com/lukasmasuch/streamlit-pydantic.git" }
+
 
 [build-system]
 requires = ["hatchling"]

@@ -172,23 +172,40 @@ class ChatAgentGraph:
         *,
         config: RunnableConfig | None = None,
         tools: list[BaseTool] | None = None,
-        db_uri: str = st.session_state.config.DATABASE_URL,
+        db_uri: str | None = None,
         default_thread_id: str | uuid.UUID | uuid6.UUID | None = None,
     ) -> None:
+        # Set db_uri from session_state only if not provided
+        if db_uri is None:
+            try:
+                db_uri = st.session_state.config.DATABASE_URL
+            except AttributeError:
+                # Handle cases where config or DATABASE_URL might be missing
+                # Or raise a more specific error if it's always expected
+                logger.error(
+                    "DATABASE_URL not found in st.session_state.config during ChatAgentGraph init."
+                )
+                # Depending on requirements, you might raise an error or set a fallback default
+                raise ValueError(
+                    "DATABASE_URL must be configured in session_state.config or passed explicitly."
+                )
+
         self.prompt = prompt
-        self.tools = tools if tools else [get_current_time]
+        # Assign default tool if tools is None
+        self.tools = tools if tools is not None else [get_current_time]
         self.db_uri = db_uri
         self.model = model or ChatOpenAI(
             model="gpt-4o", temperature=0, tags=["sr_assistant:prototype"]
         )
-        self.tools = tools
-        self.db_uri = db_uri
         self.config = config
         self.thread_id = self._set_default_thread_id(default_thread_id)
         self._checkpointer_conn_kwargs = {
             "autocommit": True,
             "prepare_threshold": 0,
         }
+        # Ensure db_uri is not None before creating the pool
+        if self.db_uri is None:
+            raise ValueError("Database URI could not be determined.")
         self.pool = ConnectionPool(
             conninfo=self.db_uri,
             max_size=20,

@@ -5,19 +5,11 @@ Needs a rewrite.
 
 from __future__ import annotations
 
-from typing import cast
-
-import uuid6
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START
-from langgraph.graph.message import MessagesState
-from langgraph.graph.state import CompiledStateGraph, StateGraph
 from loguru import logger
 
 from sr_assistant.core.models import SystematicReview
+from sr_assistant.core.schemas import PicosSuggestions, SuggestionResult
 
 
 class SuggestionAgent:
@@ -25,79 +17,35 @@ class SuggestionAgent:
 
     def __init__(self, model: str = "gpt-4o", temperature: float = 0.0) -> None:
         """Initialize the agent with model configuration."""
-        self.llm = ChatOpenAI(model=model, temperature=temperature)
-        self.workflow = self._create_workflow()
-        self.memory = MemorySaver()  # TODO: postgres checkpointer
-        self.agent = self._compile_agent()
-        # if st.session_state.criteria_messages:
-        #     self.messages: list[BaseMessage] = st.session_state.criteria_messages
-        # else:
-        #     st.session_state.criteria_messages: list[BaseMessage] = []
-        #     self.messages: list[BaseMessage] = []
-        self.messages: list[BaseMessage] = []
-        self.config = self._create_config()
+        self.llm = ChatOpenAI(
+            model=model, temperature=temperature
+        ).with_structured_output(PicosSuggestions)
 
-    def _create_workflow(self) -> StateGraph:
-        """Create the agent workflow."""
-        workflow = StateGraph(state_schema=MessagesState)
+    @logger.catch(Exception)
+    def get_suggestions(self, review: SystematicReview) -> SuggestionResult:
+        """Generates PICO suggestions and critique based on background and question."""
+        logger.info("Generating PICO suggestions...")
 
-        def call_model(state: MessagesState) -> dict[str, AIMessage]:
-            """Call the model with the current state."""
-            # FIXME: not AIMessage, MessaagesState?
-            response = cast(AIMessage, self.llm.invoke(state["messages"]))
-            return {"messages": response}
-
-        workflow.add_node("model", call_model)
-        workflow.add_edge(START, "model")
-        return workflow
-
-    def _compile_agent(self) -> CompiledStateGraph:
-        """Compile the agent with memory."""
-        # TODO: postgres
-        return self.workflow.compile(checkpointer=self.memory)
-
-    def _create_config(self) -> RunnableConfig:
-        """Create agent configuration."""
-        criteria_agent_thread_id = str(uuid6.uuid7())
-        return RunnableConfig(
-            recursion_limit=1000, configurable={"thread_id": criteria_agent_thread_id}
-        )
-
-    def get_suggestions(self, review: SystematicReview) -> str:
-        """Get suggestions for the given criteria."""
-        prompt = f"""\
-        The user provided the following systematic review protocol:
+        prompt = f"""Given the following systematic review context:
 
         Background: {review.background}
         Research Question: {review.research_question}
-        Inclusion Criteria: {review.inclusion_criteria}
-        Exclusion Criteria: {review.exclusion_criteria}
 
-        Please:
-        1. Check if the criteria are clear and unambiguous.
-        2. Suggest any improvements or additional details that might help during the screening process.
-        3. Identify any contradictions or points needing clarification.
+        Analyze the background and research question, then generate structured suggestions for the PICO components (Population, Intervention, Comparison, Outcome).
+        Also provide a brief general critique or suggestions for clarifying the protocol based ONLY on the background and research question provided.
+
+        If a component cannot be reliably inferred, leave its suggestion empty or state why.
         """
-        # Add message to history
-        self.messages.append(HumanMessage(content=prompt))
 
-        # Update agent state
-        state = {"messages": self.messages}
-        result = self.agent.invoke(state, config=self.config)
-
-        # Store response
-        ai_message = result["messages"][-1]
-        if isinstance(ai_message, AIMessage):
-            self.messages.append(ai_message)
-            return cast(str, ai_message.content)
-        msg = "Unexpected message type: {!r}"
-        logger.error(msg, type(ai_message))
-        raise ValueError(msg.format(type(ai_message)))
-
-    def get_message_history(self) -> list[BaseMessage]:
-        """Get the full message history."""
-        return self.messages.copy()
-
-    def clear_history(self) -> None:
-        """Clear the message history."""
-        self.messages = []
+        try:
+            structured_response: PicosSuggestions = self.llm.invoke(prompt)
+            logger.info(f"Received structured PICO suggestions: {structured_response}")
+            return SuggestionResult(
+                pico=structured_response,
+                raw_response=structured_response.general_critique,
+            )
+        except Exception as e:
+            logger.exception("LLM call failed during PICO suggestion generation.")
+            return SuggestionResult(
+                pico=None, raw_response=f"Error generating suggestions: {e}"
+            )

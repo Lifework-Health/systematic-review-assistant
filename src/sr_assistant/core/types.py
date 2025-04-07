@@ -2862,7 +2862,7 @@ class LogLevel(StrEnum):
     """
 
     def __new__(cls, value: str, level_int: int, *args: t.Any) -> t.Self:
-        self = str.__new__(cls, [value])
+        self = str.__new__(cls, value.upper())
         self._value_ = value.upper()
         self.int = level_int
         return self

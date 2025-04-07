@@ -1,3 +1,4 @@
+"""Old obsolete page, to be deleted."""
 from __future__ import annotations
 
 import pandas as pd

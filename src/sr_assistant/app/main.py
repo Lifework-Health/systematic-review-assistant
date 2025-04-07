@@ -1,11 +1,6 @@
 # sr_assistant/app/main.py
 from __future__ import annotations
 
-# fmt: off
-#from pathlib import Path
-#
-#sys.path.append(str(Path(__file__).parent.parent))
-# fmt: on
 import streamlit as st
 from dotenv import find_dotenv, load_dotenv
 from loguru import logger
@@ -49,17 +44,6 @@ def main() -> None:  # noqa: C901
     login_page = st.Page(login, title="Log in", icon=":material/login:")
     logout_page = st.Page(logout, title="Log out", icon=":material/logout:")
 
-    # bg_page = st.Page(
-    #    "pages/protocol_background.py",
-    #    title="Background",
-    #    icon=":material/wallpaper:",
-    #    default=True,
-    # )
-    # question_page = st.Page(
-    #    "pages/protocol_question.py",
-    #    title="Question",
-    #    icon=":material/question_mark:",
-    # )
     protocol_page = st.Page(
         "pages/protocol.py",
         title="Review Protocol",
@@ -75,6 +59,11 @@ def main() -> None:  # noqa: C901
         title="Abstracts Screening",
         icon=":material/preview:",
     )
+    fulltext_screening_page = st.Page(
+        "pages/screen_fulltext.py",
+        title="Fulltext Screening",
+        icon=":material/preview:",
+    )
 
     if st.session_state.logged_in:
         pg = st.navigation(
@@ -82,7 +71,7 @@ def main() -> None:  # noqa: C901
                 "Account": [logout_page],
                 "Protocol": [protocol_page],
                 "Search Strategy": [search_page],
-                "Screening": [abstracts_page],
+                "Screening": [abstracts_page, fulltext_screening_page],
             }
         )
         if "config" not in st.session_state:
@@ -90,7 +79,7 @@ def main() -> None:  # noqa: C901
         if "supabase" not in st.session_state:
             st.session_state.supabase = create_client(
                 supabase_url=st.session_state.config.SUPABASE_URL,
-                supabase_key=st.session_state.config.SUPABASE_KEY,
+                supabase_key=st.session_state.config.SUPABASE_KEY.get_secret_value(),
             )
         if "engine" not in st.session_state:
             st.session_state.engine = engine

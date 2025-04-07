@@ -119,7 +119,20 @@ class AsyncPostgresLogSink:
 
 
 def configure_logging() -> None:
-    """Configure logging."""
+    """Configure logging.
+
+    Must be called before models/schemas are imported.
+    """
+    logfire.configure(service_name="sr-assistant", environment="prototype")
+    logfire.instrument_pydantic()
+    logfire.instrument_sqlalchemy(enable_commenter=True)
+    logfire.instrument_openai()
+    logfire.instrument_anthropic()
+    logfire.instrument_psycopg("psycopg")
+    logfire.instrument_system_metrics()
+    logfire.instrument_httpx(capture_all=True)
+    logfire.log_slow_async_callbacks()
+
     logger.remove()
 
     sync_pg_sink = PostgresLogSink()
@@ -128,7 +141,7 @@ def configure_logging() -> None:
     # TODO: read level from config
     logger.configure(
         handlers=[
-            dict(
+            dict(  # noqa: C408
                 sink=sys.stderr,
                 level="DEBUG",
                 format=LOGGING_FORMAT,
@@ -136,10 +149,10 @@ def configure_logging() -> None:
                 catch=True,
                 colorize=True,
             ),
-            dict(
+            dict(  # noqa: C408
                 sink="app.log", level="DEBUG", enqueue=True, catch=True, serialize=True
             ),
-            dict(
+            dict(  # noqa: C408
                 sink=sync_pg_sink,
                 level="DEBUG",
                 enqueue=True,
@@ -149,5 +162,4 @@ def configure_logging() -> None:
             logfire.loguru_handler(),
         ],  # pyright: ignore [reportArgumentType]
     )
-
     logger.info("Logging initialized.")

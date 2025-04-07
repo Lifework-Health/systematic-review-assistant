@@ -10,6 +10,7 @@ Todo:
 from __future__ import annotations
 
 import uuid
+from typing import TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.types import AwareDatetime, JsonValue, PositiveInt  # noqa: TC002
@@ -248,3 +249,68 @@ screening input, the two reviewers share the `trace_id`. `id` is unique to the r
     )
     """Metadata read from the chain/graph events. inputs, invocation params, \
 resp metadata, token usage, etc. JSONB in Postgres."""
+
+
+# --- Agent/Step Schemas --- # Added section
+
+
+class PicosSuggestions(BaseModel):
+    """Structured PICO suggestions from LLM."""
+
+    population: str = Field(
+        description="Suggested Population/Problem description based on context."
+    )
+    intervention: str = Field(
+        description="Suggested Intervention/Exposure description."
+    )
+    comparison: str = Field(description="Suggested Comparison/Control description.")
+    outcome: str = Field(description="Suggested Outcome description.")
+    general_critique: str = Field(
+        description="General critique and suggestions for the overall protocol."
+    )
+
+
+class SuggestionResult(TypedDict):
+    """Return type for suggestion agent."""
+
+    pico: PicosSuggestions | None
+    raw_response: str
+
+
+class ScreeningResolutionSchema(BaseSchema):
+    """Schema for resolver model output that maps to ScreeningResolution database model.
+
+    This is the structured output from the resolver model which will be used to
+    create a ScreeningResolution model instance.
+    """
+
+    resolver_decision: ScreeningDecisionType = Field(
+        description="The decision made by the resolver for this PubMed result. Should be one of: INCLUDE, EXCLUDE, or UNCERTAIN."
+    )
+    resolver_reasoning: str = Field(
+        description="Detailed reasoning for the resolver's decision. Explain your thought process clearly."
+    )
+    resolver_confidence_score: float = Field(
+        description="Confidence score for the resolver's decision, between 0.0 and 1.0. Higher values indicate more confidence."
+    )
+    resolver_include: list[str] = Field(
+        default_factory=list,
+        description="List of screening strategies (conservative, comprehensive) that the resolver believes are appropriate. Can be empty list if the decision is EXCLUDE.",
+    )
+    # These fields will be populated by the calling code
+    review_id: uuid.UUID | None = Field(
+        default=None,
+        description="ID of the systematic review. Will be populated by the caller.",
+    )
+    pubmed_result_id: uuid.UUID | None = Field(
+        default=None,
+        description="ID of the PubMed search result. Will be populated by the caller.",
+    )
+    conservative_result_id: uuid.UUID | None = Field(
+        default=None,
+        description="ID of the conservative screening result. Will be populated by the caller.",
+    )
+    comprehensive_result_id: uuid.UUID | None = Field(
+        default=None,
+        description="ID of the comprehensive screening result. Will be populated by the caller.",
+    )

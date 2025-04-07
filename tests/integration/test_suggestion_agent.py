@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from sr_assistant.core.models import Review
+from sr_assistant.core.models import SystematicReview
 from sr_assistant.step1.suggestion_agent import SuggestionAgent
 
 
@@ -16,18 +16,18 @@ def agent() -> SuggestionAgent:
 
 
 @pytest.fixture
-def sample_criteria() -> Review:
+def sample_criteria() -> SystematicReview:
     """Create sample review criteria for testing."""
-    return Review(
+    return SystematicReview(
         background="This is a sample background for a systematic review.",
-        question="Does cognitive behavioral therapy (CBT) improve anxiety symptoms in adults with generalized anxiety disorder?",
+        research_question="Does cognitive behavioral therapy (CBT) improve anxiety symptoms in adults with generalized anxiety disorder?",
         inclusion_criteria="Adults >18, Diagnosed GAD, CBT intervention, RCTs, English language",
         exclusion_criteria="Children <18, Non-human studies, Case reports, Studies without control groups",
     )
 
 
 @pytest.mark.integration
-def test_agent_suggestions(agent: SuggestionAgent, sample_criteria: Review) -> None:
+def test_agent_suggestions(agent: SuggestionAgent, sample_criteria: SystematicReview) -> None:
     """Test that the agent provides suggestions and maintains message history."""
     # Get suggestions
     suggestions = agent.get_suggestions(sample_criteria)
@@ -50,7 +50,7 @@ def test_agent_suggestions(agent: SuggestionAgent, sample_criteria: Review) -> N
 
 @pytest.mark.integration
 def test_agent_multiple_interactions(
-    agent: SuggestionAgent, sample_criteria: Review
+    agent: SuggestionAgent, sample_criteria: SystematicReview
 ) -> None:
     """Test that the agent maintains history across multiple interactions."""
     # First interaction
@@ -58,8 +58,8 @@ def test_agent_multiple_interactions(
     assert first_response, "First response should not be empty"
 
     # Second interaction with modified criteria
-    modified_criteria = Review(
-        question=sample_criteria.question,
+    modified_criteria = SystematicReview(
+        research_question=sample_criteria.research_question,
         inclusion_criteria=sample_criteria.inclusion_criteria
         + ", Published after 2010",
         exclusion_criteria=sample_criteria.exclusion_criteria,
@@ -80,7 +80,7 @@ def test_agent_multiple_interactions(
 
 
 @pytest.mark.integration
-def test_agent_clear_history(agent: SuggestionAgent, sample_criteria: Review) -> None:
+def test_agent_clear_history(agent: SuggestionAgent, sample_criteria: SystematicReview) -> None:
     """Test that the agent can clear its message history."""
     # Get initial suggestions
     agent.get_suggestions(sample_criteria)

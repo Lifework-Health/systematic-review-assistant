@@ -6,7 +6,6 @@
   "ruff.fixAll": true,
   "ruff.lint.enable": true,
   "ruff.organizeImports": true,
-  "ruff.showNotifications": "always",
   "ruff.importStrategy": "fromEnvironment",
   "ruff.nativeServer": true,
   "ruff.configurationPreference": "filesystemFirst",
