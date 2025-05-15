@@ -69,8 +69,8 @@ run.prototype: docker.build ## Run the development server using Docker (prototyp
 		-v $(shell pwd)/typings:/app/typings \
 		-v $(shell pwd)/.pytest_cache:/app/.pytest_cache \
 		-v $(shell pwd)/htmlcov:/app/htmlcov \
-		-v $(shell pwd)/app.log:/app/app.log \
 		$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG_LATEST)
+	#-v $(shell pwd)/app.log:/app/app.log \ # TODO: fix this, it's a file but gets mounted as dir
 
 # If you need to run the app with the test environment, you can add a similar target:
 # run.test: docker.build ## Run the development server using Docker (test environment with .env.test)
@@ -112,10 +112,10 @@ docker.test: ## Base target to run tests in Docker (internal use with ENV_FILE a
 		-v $(shell pwd)/typings:/app/typings \
 		-v $(shell pwd)/.pytest_cache:/app/.pytest_cache \
 		-v $(shell pwd)/htmlcov:/app/htmlcov \
-		-v $(shell pwd)/app.log:/app/app.log \
 		$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG_LATEST) \
 		sh -c "rm -rf /app/.coverage && uv run pytest $(PYTEST_CMD)"
 # -v $(shell pwd)/.coverage:/app/.coverage \ # Temporarily commented out for debugging
+	#-v $(shell pwd)/app.log:/app/app.log \ # FIXME
 
 test.unit: docker.build ## Run unit tests with coverage using Docker (uses .env.test)
 	@rm -rf .coverage
