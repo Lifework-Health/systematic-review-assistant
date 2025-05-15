@@ -324,7 +324,10 @@ def screen_abstracts_chain_on_end_cb(run_obj: Run) -> None:  # noqa: C901
                     )
                 cr_logger.debug(f"chat_model child child run: {ccr!r}")
         model_name = resp_metadata.get(
-            "ls_model_name", invocation_params.get("model_name", "not_found")
+            "ls_model_name",
+            invocation_params.get(
+                "model_name", "gpt-4o"
+            ),  # FIXME: hardcoded for demo purposes, need to properly parse after presentation
         )
         screening_result = ScreeningResult(
             id=result_id,
