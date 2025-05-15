@@ -1,6 +1,14 @@
-.PHONY: help bootstrap python python.list install install.prod format lint ruff.fix typecheck test.unit test.integration test.all clean clean.lean security supabase.cli supabase.dbdev submodules
+.PHONY: help bootstrap python python.list install install.prod format lint ruff.fix typecheck clean clean.lean security supabase.cli supabase.dbdev submodules docker.build docker.test run run.prototype test.unit test.integration test.all
 
 .DEFAULT_GOAL := help
+
+SHELL := /bin/bash
+
+# Get the short Git SHA
+GIT_SHA := $(shell git rev-parse --short HEAD)
+
+DOCKER_IMAGE_NAME := mph-sra
+DOCKER_IMAGE_TAG_LATEST := latest
 
 bootstrap:  ## How to install the `uv` project managent tool
 	@echo "Pick your poison:"
@@ -15,6 +23,10 @@ bootstrap:  ## How to install the `uv` project managent tool
 	@echo "    powershell -ExecutionPolicy ByPass -c 'irm https://astral.sh/uv/install.ps1 | iex'"
 	@echo
 	@echo "Or go container:  docker run ghcr.io/astral-sh/uv ..."
+
+docker.build: ## Build the Docker image
+	@echo "Building Docker image $(DOCKER_IMAGE_NAME):$(GIT_SHA) and tagging as $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG_LATEST)..."
+	docker build -t $(DOCKER_IMAGE_NAME):$(GIT_SHA) -t $(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG_LATEST) .
 
 python.install: ## Install project local Python managed by uv
 	uv python install
@@ -38,8 +50,40 @@ install: python.install ## Install all dependencies for development
 	uv run pre-commit install --hook-type pre-push
 	@echo "If needed, also run 'make deno.cli' if developing edge functions"
 
-run: install  ## Run the development server
-	uv run streamlit run ./src/sr_assistant/app/main.py
+# Default run uses .env (prototype)
+run: run.prototype
+
+run.prototype: docker.build ## Run the development server using Docker (prototype environment with .env)
+	@echo "Running application in Docker container (prototype environment)..."
+	@printf "\n\033[0;32m#####################################################################\033[0m\n"
+	@printf "\033[0;32m#                                                                   #\033[0m\n"
+	@printf "\033[0;32m#   Access the Streamlit app at: http://localhost:8501              #\033[0m\n"
+	@printf "\033[0;32m#   Or via:                       http://127.0.0.1:8501             #\033[0m\n"
+	@printf "\033[0;32m#                                                                   #\033[0m\n"
+	@printf "\033[0;32m#####################################################################\033[0m\n\n"
+	docker run --rm -it \
+		--env-file .env \
+		-p 8501:8501 \
+		-v $(shell pwd)/src:/app/src \
+		-v $(shell pwd)/tests:/app/tests \
+		-v $(shell pwd)/typings:/app/typings \
+		-v $(shell pwd)/.pytest_cache:/app/.pytest_cache \
+		-v $(shell pwd)/htmlcov:/app/htmlcov \
+		-v $(shell pwd)/app.log:/app/app.log \
+		$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG_LATEST)
+
+# If you need to run the app with the test environment, you can add a similar target:
+# run.test: docker.build ## Run the development server using Docker (test environment with .env.test)
+# 	@echo "Running application in Docker container (test environment)..."
+# 	docker run --rm -it \
+# 		--env-file .env.test \
+# 		-p 8501:8501 \
+# 		-v $(shell pwd)/src:/app/src \
+# 		-v $(shell pwd)/tests:/app/tests \
+# 		-v $(shell pwd)/.pytest_cache:/app/.pytest_cache \
+# 		-v $(shell pwd)/htmlcov:/app/htmlcov \
+# 		-v $(shell pwd)/.coverage:/app/.coverage \
+# 		$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG_LATEST)
 
 format:  ## Format and fix code with ruff
 	uv run ruff format
@@ -59,15 +103,32 @@ security:
 	uv run pip-audit
 	uv run ruff --select="S"
 
-test.unit: ## Run unit tests with coverage
-	uv run pytest tests/unit --cov=src --cov-report=term --cov-report=html
+docker.test: ## Base target to run tests in Docker (internal use with ENV_FILE and PYTEST_CMD args)
+	@echo "Running tests in Docker container with $(ENV_FILE) environment..."
+	docker run --rm -it \
+		--env-file $(ENV_FILE) \
+		-v $(shell pwd)/src:/app/src \
+		-v $(shell pwd)/tests:/app/tests \
+		-v $(shell pwd)/typings:/app/typings \
+		-v $(shell pwd)/.pytest_cache:/app/.pytest_cache \
+		-v $(shell pwd)/htmlcov:/app/htmlcov \
+		-v $(shell pwd)/app.log:/app/app.log \
+		$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG_LATEST) \
+		sh -c "rm -rf /app/.coverage && uv run pytest $(PYTEST_CMD)"
+# -v $(shell pwd)/.coverage:/app/.coverage \ # Temporarily commented out for debugging
+
+test.unit: docker.build ## Run unit tests with coverage using Docker (uses .env.test)
+	@rm -rf .coverage
+	$(MAKE) docker.test ENV_FILE=.env.test PYTEST_CMD="tests/unit --cov=src --cov-report=term --cov-report=html"
 	@echo "Coverage report available at htmlcov/index.html"
 
-test.integration: ## Run integration tests only
-	uv run pytest tests/integration -m integration
+test.integration: docker.build ## Run integration tests only using Docker (uses .env.test)
+	@rm -rf .coverage
+	$(MAKE) docker.test ENV_FILE=.env.test PYTEST_CMD="tests/integration -m integration"
 
-test.all: ## Run all tests with coverage
-	uv run pytest tests --cov=src --cov-report=term --cov-report=html
+test.all: docker.build ## Run all tests with coverage using Docker (uses .env.test)
+	@rm -rf .coverage
+	$(MAKE) docker.test ENV_FILE=.env.test PYTEST_CMD="tests --cov=src --cov-report=term --cov-report=html"
 	@echo "Coverage report available at htmlcov/index.html"
 
 pre-commit:  ## Run pre-commit on all files

@@ -69,7 +69,6 @@ class Settings(BaseSettings):
     DATABASE_URL: PostgresDsn = Field(
         default="postgresql://postgres:postgres@127.0.0.1:54322/postgres",  # pyright: ignore [reportAssignmentType]
         description="For test and prototype envs this should be a `postgresql+psycopg:// useing pooled SupaBase DSN.",
-        validation_alias="database_url",
     )
     """For test and prototype envs this should be a `postgresql+psycopg:// useing pooled SupaBase DSN."""
 

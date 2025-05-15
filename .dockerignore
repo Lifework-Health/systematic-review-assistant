@@ -19,3 +19,10 @@
 **/docker-compose.yml
 **/docker-compose.yaml
 **/.dockerignore
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+app.log
+**/*.bak
+edge-functions.code-workspace
